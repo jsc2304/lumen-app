@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 — 2026-11-19
+
+- Encrypt clipboard history, saved clipboard images, notes and AI chats with a key in the macOS Keychain.
+- Keep existing chats when a new conversation starts and finish pending archive writes on quit.
+- macOS may ask for permission to access the archive key after an update. Keep a pre-upgrade backup of Application Support and its matching Keychain for rollback.
+
 ## 0.3.0 — 2026-11-19
 
 - Check for and install signed updates from the Lumen menu in release builds.
