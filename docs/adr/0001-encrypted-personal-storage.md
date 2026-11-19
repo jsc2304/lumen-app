@@ -20,9 +20,11 @@ it back before atomic replacement. Persist authenticated migration state so a la
 is not mistaken for legacy data on restart, while an interrupted first migration can resume.
 Do not create a new plaintext backup. Unreadable originals stay intact.
 
-If the key is lost, Lumen blocks access, preserves the archive and explains the recovery path. Missing/locked keys or corrupt
-archives do not permit empty-default overwrites or plaintext fallback. No automatic reset is included.
-A later destructive recovery UI would require its own explicit user action.
+If the key is missing or the Keychain is locked, Lumen stops reading and writing the on-disk archive,
+preserves its files and explains the recovery path. Corrupt archives also prevent writes. Lumen preserves
+existing data instead of saving empty defaults or falling back to plaintext. A destructive reset would
+require a separate design and explicit user action. Content already decrypted into memory may remain
+visible or available through existing actions until Lumen quits.
 
 ## Consequences
 
@@ -40,6 +42,17 @@ A later destructive recovery UI would require its own explicit user action.
 - Checks use injected keys and temporary roots. Real Keychain access, signing ACLs and live migration
   are separate installation checks, pending before release.
 
+## Backup and rollback
+
+1. Quit Lumen before upgrading and back up the entire `~/Library/Application Support/Lumen` folder.
+   For an encrypted backup, preserve the original usable Keychain key as well.
+2. To roll back, quit Lumen and keep a separate copy of the current migrated folder and its original
+   usable key. A pre-encryption version can mistake ciphertext for corrupt JSON, replace backup files
+   and write plaintext. Use the older version only with the archive from its own pre-upgrade backup.
+3. Restore the pre-upgrade folder as a unit before launching the older build. If the backup is encrypted,
+   use a version that understands its format and the Keychain key that belongs to that backup. Changes
+   made since that backup remain in the separate copy and can be opened with a compatible Lumen build.
+
 ## Platform constraint
 
 The bare swiftc/self-signed app uses the classic default Keychain. The macOS SDK states that kSecAttrAccessible applies only with synchronization
@@ -56,4 +69,5 @@ classic key would not enforce that policy. The implementation checks whether the
 ## Open
 
 - Verify signed-app Keychain access before installation; injected tests do not prove it.
+- Exercise the backup and rollback steps with a disposable archive before releasing the migration.
 - Cross-device key export/recovery and a destructive reset UI are not included.

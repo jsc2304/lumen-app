@@ -117,7 +117,7 @@ struct FormSpec {
 /// Files the app keeps in ~/Library/Application Support/Lumen.
 enum Store {
     private static var storage = SecureStorage(root: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Lumen"), key: ArchiveKeychain.key, onFailure: {
+        .appendingPathComponent("Lumen"), key: ArchiveKeychain.key, interactiveLookup: ArchiveKeychain.interactiveLookup, onFailure: {
             DispatchQueue.main.async {
                 guard NSApp != nil else { return }
                 let alert = NSAlert()
@@ -133,7 +133,7 @@ enum Store {
         return root
     }
     static var protectedAvailable: Bool { storage.available }
-    static func prepareSensitiveStorage() { storage.prepare() }
+    static func prepareSensitiveStorage() { storage.prepare(interactive: true) }
     // Called once at the beginning of the check executable, before any feature singleton is used.
     static func useForChecks(_ isolatedStorage: SecureStorage) { storage = isolatedStorage }
     static func loadBlob(_ name: String) -> Data? { storage.loadBlob("clipboard/" + name) }

@@ -39,6 +39,7 @@ func checkSecureStorage() {
     let first = bytes(s, "notes.json")
     expect(s.save(["changed"], "notes.json") && bytes(s, "notes.json") != first, "random nonce changes ciphertext for equal values")
     expect(s.saveBlob(png, "clipboard/new.png") && s.loadBlob("clipboard/new.png") == png, "new image encrypted and loaded")
+    expect(s.loadBlob("clipboard/missing.png") == nil && s.available, "missing legacy image does not pause protected storage")
     var createAllowed = [Bool]()
     let reopened = store("roundtrip", keyProvider: { allowed in createAllowed.append(allowed); return key })
     let restored: [String]? = reopened.load("notes.json")
@@ -172,12 +173,21 @@ func checkSecureStorage() {
     expect(try! fm.contentsOfDirectory(atPath: badWriter.root.path).allSatisfy { !$0.hasPrefix(".lumen-encrypt-") }, "own failed temp is removed")
 
     var locked = false
-    let relock = store("relock", keyProvider: { _ in if locked { throw SecureStorage.Failure.unavailable }; return key })
+    var lockReports = 0
+    let relock = store("relock", keyProvider: { _ in
+        if locked { throw SecureStorage.Failure.keyInteractionRequired }
+        return key
+    }, onFailure: { lockReports += 1 })
     let empty: [String]? = relock.load("notes.json")
     expect(empty == nil && relock.save(["kept"], "notes.json"), "fresh notes saved")
     let kept = bytes(relock, "notes.json")
     locked = true
     expect(!relock.save(["lost"], "notes.json") && bytes(relock, "notes.json") == kept, "locking after initialization stops writes without a cached key")
+    expect(!relock.available && !relock.available && lockReports == 1, "locked key reports once while unavailable")
+    locked = false
+    expect(relock.available && relock.save(["after unlock"], "notes.json"), "the same archive can save after unlock")
+    locked = true
+    expect(!relock.available && lockReports == 2, "another lock after successful access reports again")
     let noLoad = store("roundtrip")
     expect(!noLoad.save([String](), "notes.json") && bytes(s, "notes.json") == changed,
            "save without successful load cannot replace an existing archive")
@@ -189,6 +199,63 @@ func checkSecureStorage() {
     legacy(laterDamage, "notes.json", damaged)
     expect(!laterDamage.save(["new"], "notes.json") && bytes(laterDamage, "notes.json") == damaged,
            "corruption after successful load is not overwritten by later edits")
+
+    let missingRevision = store("concurrent-create")
+    let firstCreate = store("concurrent-create")
+    let absentForBoth: [String]? = missingRevision.load("notes.json")
+    let absentForFirst: [String]? = firstCreate.load("notes.json")
+    expect(absentForBoth == nil && absentForFirst == nil && firstCreate.save(["first"], "notes.json"),
+           "two owners can observe a missing archive before the first save")
+    let firstRevision = bytes(firstCreate, "notes.json")
+    expect(!missingRevision.save(["second"], "notes.json") && bytes(firstCreate, "notes.json") == firstRevision,
+           "a writer which saw a missing archive cannot overwrite the first saved revision")
+
+    let removed = store("concurrent-remove")
+    let initialMissing: [String]? = removed.load("notes.json")
+    expect(initialMissing == nil && removed.save(["first"], "notes.json"), "removed archive fixture saved")
+    let removedURL = removed.root.appendingPathComponent("notes.json")
+    try! fm.removeItem(at: removedURL)
+    expect(!removed.save(["second"], "notes.json") && !fm.fileExists(atPath: removedURL.path),
+           "a writer which saw an archive cannot recreate an externally removed file")
+
+    let writerEntered = DispatchSemaphore(value: 0)
+    let releaseWriter = DispatchSemaphore(value: 0)
+    let firstFinished = DispatchSemaphore(value: 0)
+    let secondStarted = DispatchSemaphore(value: 0)
+    let secondFinished = DispatchSemaphore(value: 0)
+    let firstWriter = store("concurrent-create", writer: { data, url in
+        writerEntered.signal()
+        guard releaseWriter.wait(timeout: .now() + 5) == .success else { throw SecureStorage.Failure.writeFailed }
+        try SecureStorage.atomicWrite(data, url)
+    })
+    let secondWriter = store("concurrent-create")
+    let firstWriterRead: [String]? = firstWriter.load("notes.json")
+    let secondWriterRead: [String]? = secondWriter.load("notes.json")
+    expect(firstWriterRead == ["first"] && secondWriterRead == firstWriterRead, "both writers load the same revision")
+    DispatchQueue.global().async {
+        expect(firstWriter.save(["first edit"], "notes.json"), "first writer commits its revision")
+        firstFinished.signal()
+    }
+    expect(writerEntered.wait(timeout: .now() + 5) == .success, "first writer holds the archive lock")
+    DispatchQueue.global().async {
+        secondStarted.signal()
+        expect(!secondWriter.save(["stale edit"], "notes.json"), "second writer refuses to overwrite the new revision")
+        secondFinished.signal()
+    }
+    expect(secondStarted.wait(timeout: .now() + 5) == .success, "second writer starts")
+    expect(secondFinished.wait(timeout: .now() + 0.1) == .timedOut, "second writer waits for the archive lock")
+    releaseWriter.signal()
+    expect(firstFinished.wait(timeout: .now() + 5) == .success && secondFinished.wait(timeout: .now() + 5) == .success,
+           "concurrent writes finish after releasing the archive lock")
+    let committed: [String]? = store("concurrent-create").load("notes.json")
+    expect(committed == ["first edit"], "the archive retains the only committed edit")
+
+    var interactiveLookups = 0
+    let preflight = SecureStorage(root: base.appendingPathComponent("preflight"), key: { _ in key },
+                                  interactiveLookup: { interactiveLookups += 1 })
+    expect(preflight.prepare(interactive: true) && interactiveLookups == 1, "main thread opts into the startup lookup")
+    DispatchQueue.global().sync { expect(preflight.prepare(), "ordinary preparation can run on a worker") }
+    expect(preflight.available && interactiveLookups == 1, "ordinary protected access does not ask for interaction")
 
     var failSave = false
     let failedSave = store("failed-save", writer: { data, url in

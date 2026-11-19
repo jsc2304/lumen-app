@@ -23,7 +23,7 @@ Guardrails version: 9 · Last gate run: 19.11.2026 · State: released
 
 - Lumen stores local data under `~/Library/Application Support/Lumen`. Clipboard history and saved images, notes and AI chats use AES-256-GCM with a Keychain-held key. Preferences and integration caches remain unencrypted. See [encrypted personal storage](adr/0001-encrypted-personal-storage.md).
 - Calendar content comes from EventKit. The [privacy note](../README.md#data-and-privacy) documents external transfers by feature.
-- A synthetic Lumen Store backup and restore passed in an isolated home.
+- A synthetic backup and restore of the pre-encryption Lumen Store passed in an isolated home. See [backup and rollback](adr/0001-encrypted-personal-storage.md#backup-and-rollback) for encrypted storage.
 
 ## AI usage
 
@@ -55,7 +55,7 @@ Guardrails version: 9 · Last gate run: 19.11.2026 · State: released
 | G5 Rate limits and budgets | yes | done | Optional BYOK only. No operator-run or operator-paid endpoint. Enable AI is off by default. Settings explains that the provider may charge the user. CheckAILimits verifies the persisted 500-attempt daily limit, refusal of attempt 501 and fail-closed counter storage. | 19.11.2026 |
 | G6 AI | yes | done | BYOK caps and consent as above. Offline checks cover typed streaming, prompt delimiters for selected text and Codex transcript, deadline and output limits, and metadata-only logs. Codex is read-only with shell, web, hooks and agent tools disabled for the tested CLI version. Provider metrics not returned are unknown. No operator funds or credentials. | 19.11.2026 |
 | G7 Exposure | yes | done | No listening service. Signed GitHub HTTPS QA feed and ZIP verified. Release bundle has the stable HTTPS feed and no ATS exceptions. AI remote endpoints use HTTPS, with loopback HTTP for local providers. GitHub and mite CLI failures use fixed user-facing messages. | 19.11.2026 |
-| G8 Data | yes | open | Offline storage checks cover encrypted archives and interrupted migration. Verify migration, Keychain access and backup recovery with a signed app before releasing this storage change. | |
+| G8 Data | yes | open | Offline checks cover encryption and interrupted migration. Before releasing, verify migration, Keychain access across supported signing configurations, encrypted backup recovery and rollback to a pre-upgrade backup with a disposable archive. | |
 | G9 Dependencies | yes | done | Release-time upstream audit verified the pinned Sparkle 2.10.1 distribution checksum. Advisories affecting older versions do not apply. GHSA-gcjm-h3jh-p2vc only affects the package installer path. Lumen uses signed feeds and full app ZIP updates. | 19.11.2026 |
 | G10 Public repository | yes | done | Clean initial source snapshot with GitHub noreply author and committer, redacted source and history scans, SECURITY.md and recorded pre-push review. Enable and verify private reporting when GitHub makes the public-only setting available. | 19.11.2026 |
 | G11 Version | yes | done | Bundle and Settings show 0.3.0. Build 5 exceeds both prereleases. CHANGELOG.md contains 0.3.0 notes. The staged release uses the matching version. | 19.11.2026 |

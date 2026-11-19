@@ -1,7 +1,6 @@
 import Foundation
 import CryptoKit
 import Security
-import LocalAuthentication
 import Darwin
 
 /// A versioned, authenticated archive. It never falls back to plaintext on an error.
@@ -10,10 +9,13 @@ final class SecureStorage {
     static let magic = Data("LUM1".utf8)
     static let names: Set<String> = ["clipboard.json", "ai-chats.json", "notes.json"]
     static let marker = ".lumen-store-key"
-    static let message = "Lumen could not unlock or save its protected history. Clipboard capture, notes and saved AI chats are paused. Unlock your login keychain, check free disk space, then restart Lumen. If the encryption key was lost, restore the original keychain together with your data backup. Existing files have not been reset."
-    enum Failure: Error { case unavailable, invalidFile, unreadable, notLoaded, writeFailed }
+    static let message = "Lumen could not unlock or save its protected history. Clipboard capture, notes and saved AI chats are paused. Unlock the default Keychain or check free disk space. If the problem continues, restart Lumen. If the encryption key was lost, restore the original Keychain together with your data backup. Existing files have not been reset."
+    enum Failure: Error {
+        case unavailable, keyInteractionRequired, invalidFile, notLoaded, staleRevision, writeFailed
+    }
     let root: URL
     private let keyProvider: (Bool) throws -> SymmetricKey
+    private let interactiveLookup: () -> Void
     private let writer: (Data, URL) throws -> Void
     private let onFailure: () -> Void
     private let lock = NSRecursiveLock()
@@ -23,14 +25,24 @@ final class SecureStorage {
         var version = 2
         var pending: [String: Data]
     }
+    private enum Revision: Equatable {
+        case missing
+        case encrypted(SHA256.Digest)
+    }
     private var prepared = false
     private var failed = false
-    private var loaded: Set<String> = []
+    private var reportedFailure = false
+    private var loaded: [String: Revision] = [:]
 
     init(root: URL, key: @escaping (Bool) throws -> SymmetricKey,
+         interactiveLookup: @escaping () -> Void = {},
          writer: @escaping (Data, URL) throws -> Void = SecureStorage.atomicWrite,
          onFailure: @escaping () -> Void = {}) {
-        self.root = root; keyProvider = key; self.writer = writer; self.onFailure = onFailure
+        self.root = root
+        keyProvider = key
+        self.interactiveLookup = interactiveLookup
+        self.writer = writer
+        self.onFailure = onFailure
     }
 
     static func protected(_ name: String) -> Bool {
@@ -41,8 +53,10 @@ final class SecureStorage {
     var available: Bool { prepare() }
 
     @discardableResult
-    func prepare() -> Bool {
-        perform { _ = try ready(); return true } == true
+    func prepare(interactive: Bool = false) -> Bool {
+        // A Keychain prompt can wait for the user, so run it before taking the archive lock.
+        if interactive, Thread.isMainThread { interactiveLookup() }
+        return perform { _ = try ready(); return true } == true
     }
 
     /// Includes old backups and orphaned images, not just images referenced by the current index.
@@ -79,6 +93,12 @@ final class SecureStorage {
     }
 
     private func read(_ name: String) throws -> Data { try Data(contentsOf: checkedURL(name)) }
+
+    private func readIfPresent(_ name: String) throws -> Data? {
+        do { return try read(name) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return nil }
+    }
+
     private func open(_ data: Data, _ name: String, _ key: SymmetricKey) throws -> Data {
         guard data.starts(with: Self.magic) else { throw Failure.invalidFile }
         return try AES.GCM.open(AES.GCM.SealedBox(combined: data.dropFirst(Self.magic.count)), using: key,
@@ -91,15 +111,18 @@ final class SecureStorage {
     }
 
     /// Ciphertext is read back and authenticated from a private sibling before atomically replacing an original.
-    private func write(_ data: Data, _ name: String, _ key: SymmetricKey) throws {
+    @discardableResult
+    private func write(_ data: Data, _ name: String, _ key: SymmetricKey) throws -> SHA256.Digest {
         let target = try checkedURL(name)
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let temp = target.deletingLastPathComponent().appendingPathComponent(".lumen-encrypt-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: temp) }
         try writer(try sealed(data, name, key), temp)
-        guard try open(Data(contentsOf: temp), name, key) == data else { throw Failure.writeFailed }
+        let verified = try Data(contentsOf: temp)
+        guard try open(verified, name, key) == data else { throw Failure.writeFailed }
         guard Darwin.rename(temp.path, target.path) == 0 else { throw Failure.writeFailed }
+        return SHA256.hash(data: verified)
     }
 
     static func atomicWrite(_ data: Data, _ url: URL) throws {
@@ -122,7 +145,6 @@ final class SecureStorage {
             guard try migration(key).pending.isEmpty else { throw Failure.unavailable }
             return key
         }
-        try fm.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let files = try archiveFiles()
         var hasCiphertext = false
         for name in files {
@@ -181,24 +203,54 @@ final class SecureStorage {
         return key
     }
 
+    private func withArchiveLock<T>(_ work: () throws -> T) throws -> T {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        // Keep this inode in place. All cooperating Lumen processes serialize through it.
+        let url = root.appendingPathComponent(".lumen-store-lock")
+        let descriptor = Darwin.open(url.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
+        guard descriptor >= 0 else { throw Failure.unavailable }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG else { throw Failure.invalidFile }
+        while flock(descriptor, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw Failure.unavailable }
+        }
+        return try work()
+    }
+
     private func perform<T>(_ work: () throws -> T) -> T? {
         lock.lock(); defer { lock.unlock() }
         guard !failed else { return nil }
-        do { return try work() }
-        catch {
-            failed = true
-            onFailure() // sanitized, once per session; never log user contents or keys
+        do {
+            let result = try withArchiveLock(work)
+            reportedFailure = false
+            return result
+        }
+        catch Failure.keyInteractionRequired {
+            reportFailure()
             return nil
         }
+        catch {
+            failed = true
+            reportFailure()
+            return nil
+        }
+    }
+
+    private func reportFailure() {
+        guard !reportedFailure else { return }
+        reportedFailure = true
+        onFailure()
     }
 
     func load<T: Decodable>(_ name: String) -> T? {
         perform {
             let key = try ready()
-            let url = try checkedURL(name)
-            guard FileManager.default.fileExists(atPath: url.path) else { loaded.insert(name); return nil }
-            let value = try JSONDecoder().decode(T.self, from: open(read(name), name, key))
-            loaded.insert(name)
+            guard let data = try readIfPresent(name) else { loaded[name] = .missing; return nil }
+            let value = try JSONDecoder().decode(T.self, from: open(data, name, key))
+            loaded[name] = .encrypted(SHA256.hash(data: data))
             return value
         } ?? nil
     }
@@ -207,19 +259,20 @@ final class SecureStorage {
     func save<T: Encodable>(_ value: T, _ name: String) -> Bool {
         perform {
             let key = try ready()
-            if FileManager.default.fileExists(atPath: try checkedURL(name).path) {
-                guard loaded.contains(name) else { throw Failure.notLoaded }
-                // A changed or damaged file after the initial load must not be silently overwritten either.
-                _ = try open(read(name), name, key)
-            }
-            try write(JSONEncoder().encode(value), name, key)
-            loaded.insert(name)
+            guard let expected = loaded[name] else { throw Failure.notLoaded }
+            let current: Revision = try readIfPresent(name).map { .encrypted(SHA256.hash(data: $0)) } ?? .missing
+            guard current == expected else { throw Failure.staleRevision }
+            loaded[name] = .encrypted(try write(JSONEncoder().encode(value), name, key))
             return true
         } == true
     }
 
     func loadBlob(_ name: String) -> Data? {
-        perform { let key = try ready(); return try open(read(name), name, key) }
+        perform {
+            let key = try ready()
+            guard let data = try readIfPresent(name) else { return nil }
+            return try open(data, name, key)
+        } ?? nil
     }
 
     @discardableResult
@@ -236,16 +289,35 @@ final class SecureStorage {
 
 /// Separate from API-key helpers: do not delete/recreate the encryption key on lookup failures.
 enum ArchiveKeychain {
-    private static var query: [String: Any] {
-        let context = LAContext()
-        context.interactionNotAllowed = true
-        return [kSecClass as String: kSecClassGenericPassword,
+    private static let interactionLock = NSLock()
+    private static let query: [String: Any] = [
+         kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: "com.jan.lumen", kSecAttrAccount as String: "store-key",
          kSecAttrSynchronizable as String: false,
-         kSecUseDataProtectionKeychain as String: false,
-         kSecUseAuthenticationContext as String: context]
-    }
+         kSecUseDataProtectionKeychain as String: false]
+
     static func key(allowCreate: Bool) throws -> SymmetricKey {
+        interactionLock.lock()
+        defer { interactionLock.unlock() }
+        // SecItem's per-query UI setting applies to the Data Protection Keychain only.
+        var previous = DarwinBoolean(false)
+        guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess,
+              SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else {
+            throw SecureStorage.Failure.keyInteractionRequired
+        }
+        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
+        return try lookup(allowCreate: allowCreate, interactive: false)
+    }
+
+    static func interactiveLookup() {
+        guard Thread.isMainThread else { return }
+        interactionLock.lock()
+        defer { interactionLock.unlock() }
+        // The noninteractive archive operation independently verifies access and never uses this key.
+        _ = try? lookup(allowCreate: false, interactive: true)
+    }
+
+    private static func lookup(allowCreate: Bool, interactive: Bool) throws -> SymmetricKey {
         // Lumen uses a self-signed native app, not an entitled Data Protection keychain app.
         // Accessibility attributes are not enforced by the classic macOS keychain. Check
         // its real lock state, then pin both lookup and insertion to that same keychain.
@@ -254,8 +326,12 @@ enum ArchiveKeychain {
             throw SecureStorage.Failure.unavailable
         }
         var state: SecKeychainStatus = 0
-        guard SecKeychainGetStatus(keychain, &state) == errSecSuccess,
-              state & SecKeychainStatus(kSecUnlockStateStatus) != 0 else { throw SecureStorage.Failure.unavailable }
+        guard SecKeychainGetStatus(keychain, &state) == errSecSuccess else {
+            throw SecureStorage.Failure.unavailable
+        }
+        if !interactive, state & SecKeychainStatus(kSecUnlockStateStatus) == 0 {
+            throw SecureStorage.Failure.keyInteractionRequired
+        }
         var q = query
         q[kSecMatchSearchList as String] = [keychain]
         q[kSecReturnData as String] = true
@@ -266,15 +342,23 @@ enum ArchiveKeychain {
             guard let bytes = result as? Data, bytes.count == 32 else { throw SecureStorage.Failure.unavailable }
             return SymmetricKey(data: bytes)
         }
-        guard status == errSecItemNotFound, allowCreate else { throw SecureStorage.Failure.unavailable }
+        guard status == errSecItemNotFound, allowCreate else { throw failure(for: status) }
         let newKey = SymmetricKey(size: .bits256)
         var add = query
-        add[kSecUseAuthenticationContext as String] = nil
         add[kSecUseKeychain as String] = keychain
         add[kSecValueData as String] = newKey.withUnsafeBytes { Data($0) }
         let added = SecItemAdd(add as CFDictionary, nil)
-        if added == errSecDuplicateItem { return try key(allowCreate: false) }
-        guard added == errSecSuccess else { throw SecureStorage.Failure.unavailable }
+        if added == errSecDuplicateItem { return try lookup(allowCreate: false, interactive: interactive) }
+        guard added == errSecSuccess else { throw failure(for: added) }
         return newKey
+    }
+
+    private static func failure(for status: OSStatus) -> SecureStorage.Failure {
+        switch status {
+        case errSecInteractionNotAllowed, errSecInteractionRequired, errSecAuthFailed, errSecUserCanceled:
+            return .keyInteractionRequired
+        default:
+            return .unavailable
+        }
     }
 }

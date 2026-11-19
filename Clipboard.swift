@@ -115,9 +115,11 @@ final class Clipboard {
     // MARK: Capture
 
     private func poll() {
+        guard !paused else { return }
         let pb = NSPasteboard.general
-        guard Store.protectedAvailable, !paused, pb.changeCount != lastChange else { return }
-        lastChange = pb.changeCount
+        let changeCount = pb.changeCount
+        guard changeCount != lastChange, Store.protectedAvailable else { return }
+        lastChange = changeCount
         if Self.isSecret(pb.types ?? []) { return }
         let app = NSWorkspace.shared.frontmostApplication
         var entry = Entry(app: app?.localizedName, bundleID: app?.bundleIdentifier)
