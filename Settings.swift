@@ -81,7 +81,7 @@ private struct GeneralSettings: View {
             Section("Clipboard History") {
                 LabeledContent("Entries", value: "\(Clipboard.shared.count)")
                 Button("Clear Clipboard History…") {
-                    if confirm("Delete the whole clipboard history? This cannot be undone.") { Clipboard.shared.clear(); refresh += 1 }
+                    if confirm("Remove the whole clipboard history? Encrypted image files remain on disk.") { Clipboard.shared.clear(); refresh += 1 }
                 }
             }
         }

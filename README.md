@@ -53,19 +53,19 @@ Use `./check.sh` to run the self-checks, or `./build.sh --build-only` to produce
 
 Release builds offer **Check for Updates…** in the Lumen menu. Lumen checks public GitHub Releases and verifies the update signature before installation. A local source build needs release-channel configuration to use this flow.
 
+Before upgrading to a version that encrypts your history, back up the entire Lumen folder with the app closed. Older versions can alter migrated files and write plaintext. If you need to go back, restore a backup made before the upgrade and use it with the older app. [Backup and rollback instructions](docs/adr/0001-encrypted-personal-storage.md#backup-and-rollback)
+
 ## Usage
 
 Use the configured launcher hotkey to open search. Press Return to run the selected result or ⌘K to see its actions. Press Escape to go back or dismiss the panel.
 
 ## Data and privacy
 
-- **Stays on this Mac**, in `~/Library/Application Support/Lumen`, unencrypted: usage ranking, favorites,
-  aliases and hotkeys, clipboard history with images and copies of new screenshots, snippets, quicklinks,
-  calculator history, notes, AI chats (including attached screenshots), your AI commands, focus sessions and
-  auto-quit rules, the GitHub, script and shortcut caches, and which mite project a meeting title was booked to. Copies that
-  password managers mark as concealed or transient are never stored. Settings → Clear Clipboard History
-  deletes the history.
+- **Stays on this Mac**, in `~/Library/Application Support/Lumen`: clipboard history and its saved images, notes and AI chats are encrypted with AES-256-GCM. The key is stored in the default macOS Keychain. Lumen migrates existing files when it opens protected storage. [Storage and recovery](docs/adr/0001-encrypted-personal-storage.md)
+- Preferences, quicklinks, snippets, usage ranking, caches and other feature data remain unencrypted. Settings → Clear Clipboard History removes history entries. Encrypted image files remain on disk to preserve recovery after a failed save. Copies marked concealed or transient by password managers are excluded from the history.
 - AI chats are kept until you delete them with **Delete Chat**. Creating a new chat keeps older conversations.
+- If the Keychain is locked or the key is missing, Lumen pauses reads and writes to the protected archive and preserves its files. Content already loaded may remain visible until Lumen quits. An encrypted backup needs the original Keychain key along with Application Support.
+- Note exports, original screenshots and the system pasteboard are outside archive encryption. Codex image attachments use temporary files that Lumen removes when a request finishes normally.
 - **Leaves the Mac** only for these features:
   - AI: the question, the selected text, chat messages and screenshots you send go to the configured provider;
     Translate sends text to AI only after you explicitly choose the AI translation action. Claude: `api.anthropic.com`,

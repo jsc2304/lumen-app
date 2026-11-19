@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSApp.mainMenu = editMenu()
+        Store.prepareSensitiveStorage()
         _ = AX.promptIfNeeded()
         HotKeys.registerMain { PanelController.shared.toggle() }
         Root.registerHotkeys()
