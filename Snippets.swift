@@ -15,6 +15,7 @@ final class Snippets {
 
     private var snippets: [Snippet] = Store.load("snippets.json") ?? []
     private var tap: CFMachPort?
+    private var tapRetry: Timer?
     private var typed = ""      // the last characters typed in other apps
     private var busy = false    // while expanding; the key presses we post are not typing
     private var events = 0      // counts keys and clicks; a scheduled expansion runs only if none came after its keyword
@@ -30,7 +31,11 @@ final class Snippets {
                   closes: false) { [self] in Launcher.shared.push(form()) }]
     }
 
-    private func save() { Store.save(snippets, "snippets.json") }
+    private func save() {
+        Store.save(snippets, "snippets.json")
+        resetTyping()
+        updateTap()
+    }
 
     // MARK: List and form
 
@@ -208,44 +213,59 @@ final class Snippets {
 
     // MARK: Keyword expansion
 
-    /// Starts keyword expansion; called once at launch. Until Lumen has Accessibility access the keyboard
-    /// tap cannot be created, so it is tried again every 5 seconds.
+    /// Called once at launch. Only snippets with keywords need a global input listener.
     func start() {
-        if !startTap() {
-            NSLog("Lumen: keyboard event tap unavailable, snippet keywords expand once Accessibility is granted")
-            Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [self] timer in
-                if startTap() { timer.invalidate() }
-            }
-        }
+        updateTap()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
-                                                          object: nil, queue: .main) { [weak self] _ in self?.typed = "" }
+                                                          object: nil, queue: .main) { [weak self] _ in self?.resetTyping() }
+    }
+
+    private func updateTap() {
+        guard snippets.contains(where: { $0.keyword?.isEmpty == false }) else {
+            tapRetry?.invalidate()
+            tapRetry = nil
+            if let tap { CFMachPortInvalidate(tap) }
+            tap = nil
+            return
+        }
+        if tap != nil || startTap() {
+            tapRetry?.invalidate()
+            tapRetry = nil
+        } else if tapRetry == nil {
+            tapRetry = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.updateTap() }
+        }
+    }
+
+    private func resetTyping() {
+        typed = ""
+        events += 1 // Also cancels any expansion scheduled for the previous focus or snippet list.
     }
 
     private func startTap() -> Bool {
         guard AXIsProcessTrusted() else { return false }
         let mask = [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].reduce(CGEventMask(0)) { $0 | 1 << $1.rawValue }
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+        // Quartz delivers input independently of a passive listener, even if Lumen is busy.
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
                                           eventsOfInterest: mask, callback: { _, type, event, _ in
+            let snippets = Snippets.shared
             if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-                if let tap = Snippets.shared.tap { CGEvent.tapEnable(tap: tap, enable: true) }
-                return Unmanaged.passUnretained(event)
+                snippets.resetTyping()
+                if let tap = snippets.tap { CGEvent.tapEnable(tap: tap, enable: true) }
+                return nil
             }
             var length = 0
             var chars = [UniChar](repeating: 0, count: 8)
             if type == .keyDown { event.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &chars) }
             let characters = String(utf16CodeUnits: chars, count: length), flags = event.flags
-            DispatchQueue.main.async { Snippets.shared.handle(type, characters, flags) }
-            return Unmanaged.passUnretained(event)
+            snippets.handle(type, characters, flags)
+            return nil
         }, userInfo: nil) else { return false }
-        self.tap = tap
-        // The tap gets its own thread and only hands each event to the main thread, so a busy Lumen
-        // (an AppleScript, a mite booking) never holds up typing in other apps.
-        let thread = Thread {
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
-            CFRunLoopRun()
+        guard let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else {
+            CFMachPortInvalidate(tap)
+            return false
         }
-        thread.name = "Lumen snippet keys"
-        thread.start()
+        self.tap = tap
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         return true
     }
 
