@@ -42,6 +42,21 @@ func checkAIChat() {
     expect(loaded?.count == 1 && loaded?[0].id == chat.id && loaded?[0].messages == turns
            && abs((loaded?[0].date ?? .distantPast).timeIntervalSince(chat.date)) < 0.001, "chat round trip")
 
+    // Creating chat 201 must not silently erase the oldest conversation or its images.
+    let history = (0..<200).map { n in
+        AIChat.Conversation(messages: [AIMessage(role: .user, text: "Chat \(n)", images: [png])])
+    }
+    var archived: [AIChat.Conversation] = []
+    let model = AIChat(chats: history, persist: { archived = $0 })
+    let newest = AIChat.Conversation(messages: [AIMessage(role: .user, text: "Newest")])
+    model.add(newest)
+    expect(model.chats.count == 201 && model.current == newest.id, "chat 201 is selected without trimming history")
+    expect(model.chats.map(\.id) == [newest.id] + history.map(\.id), "all older chats keep their order")
+    model.flushPendingWrites()
+    let restored = (try? JSONEncoder().encode(archived)).flatMap { try? JSONDecoder().decode([AIChat.Conversation].self, from: $0) }
+    expect(restored?.count == 201 && restored?.last?.id == history.last?.id
+           && restored?.last?.messages == history.last?.messages, "saved history keeps the oldest chat and its image")
+
     // Titles come from the first message.
     expect(AIChat.title(nil) == "New Chat" && chat.title == "What is this?", "title from the first message")
     expect(AIChat.title(AIMessage(role: .user, text: "\n  How do I quit vim?\nThanks")) == "How do I quit vim?", "title is the first non-empty line")
