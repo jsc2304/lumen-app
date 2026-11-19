@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 — 2026-11-19
+
+- Ask for Accessibility permission when a feature needs it or you request it in Settings. Startup and snippet registration check permission without opening the system prompt.
+
 ## 0.4.0 — 2026-11-19
 
 - Encrypt clipboard history, saved clipboard images, notes and AI chats with a key in the macOS Keychain.

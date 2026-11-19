@@ -4,7 +4,8 @@ import AppKit
 /// launcher panel is open.
 enum AX {
     static func promptIfNeeded() -> Bool {
-        AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        if AXIsProcessTrusted() { return true }
+        return AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
     }
 
     /// Never Lumen itself: after an alert or the Settings window Lumen is frontmost, and window commands

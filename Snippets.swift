@@ -222,6 +222,7 @@ final class Snippets {
     }
 
     private func startTap() -> Bool {
+        guard AXIsProcessTrusted() else { return false }
         let mask = [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown].reduce(CGEventMask(0)) { $0 | 1 << $1.rawValue }
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                           eventsOfInterest: mask, callback: { _, type, event, _ in
