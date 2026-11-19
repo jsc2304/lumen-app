@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleExecutable</key>
+	<string>Lumen</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.jan.lumen</string>
+	<key>CFBundleName</key>
+	<string>Lumen</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.0</string>
+	<key>CFBundleVersion</key>
+	<string>5</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Lumen runs system commands such as Restart, Empty Trash and Toggle Dark Mode through System Events and Finder.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Lumen shows your upcoming events in My Schedule and the next meeting in the search.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Lumen searches your contacts when you use Search Contacts.</string>
+</dict>
+</plist>

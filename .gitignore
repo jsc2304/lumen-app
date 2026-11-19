@@ -1,0 +1,10 @@
+build/
+.DS_Store
+
+# Local credentials must never enter Git.
+.env
+.env.*
+!.env.example
+
+# Local notes and data that do not belong in the public repository.
+.private/
