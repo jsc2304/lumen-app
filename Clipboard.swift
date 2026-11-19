@@ -98,6 +98,7 @@ final class Clipboard {
     }
 
     private func addScreenshots() {
+        guard Store.protectedAvailable else { return }
         screenshots.disableUpdates()
         defer { screenshots.enableUpdates() }
         for case let item as NSMetadataItem in screenshots.results {
@@ -106,7 +107,7 @@ final class Clipboard {
                   let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) else { continue }
             seenScreenshots.insert(path)
             let name = UUID().uuidString + ".png"
-            try? png.write(to: imagesDir.appendingPathComponent(name))
+            guard Store.saveBlob(png, name) else { return }
             add(Entry(image: name, app: "Screenshot", bundleID: "com.apple.screencaptureui"))
         }
     }
@@ -115,7 +116,7 @@ final class Clipboard {
 
     private func poll() {
         let pb = NSPasteboard.general
-        guard !paused, pb.changeCount != lastChange else { return }
+        guard Store.protectedAvailable, !paused, pb.changeCount != lastChange else { return }
         lastChange = pb.changeCount
         if Self.isSecret(pb.types ?? []) { return }
         let app = NSWorkspace.shared.frontmostApplication
@@ -129,7 +130,7 @@ final class Clipboard {
         } else if let data = pb.data(forType: .png) ?? pb.data(forType: .tiff),
                   let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) {
             let name = UUID().uuidString + ".png"
-            try? png.write(to: imagesDir.appendingPathComponent(name))
+            guard Store.saveBlob(png, name) else { return }
             entry.image = name
         } else {
             return
@@ -138,6 +139,7 @@ final class Clipboard {
     }
 
     private func add(_ entry: Entry) {
+        guard Store.protectedAvailable else { return }
         let result = Self.adding(entry, to: entries, cap: Self.limit)
         entries = result.kept
         forget(result.dropped)
@@ -157,19 +159,21 @@ final class Clipboard {
         }
     }
 
-    /// Deletes what the entries leave behind on disk and in the caches.
+    /// Drops caches. Encrypted image files stay until a transactional archive cleanup exists:
+    /// deleting before the asynchronous index save could lose images after a failed save.
     private func forget(_ gone: [Entry]) {
+        guard Store.protectedAvailable else { return }
         for e in gone {
             rendered[e.id] = nil
             guard let image = e.image else { continue }
-            try? FileManager.default.removeItem(at: imagesDir.appendingPathComponent(image))
             thumbnails[image] = nil
             sizes[image] = nil
         }
     }
 
-    /// Deletes everything; with `keepingPinned` the pinned entries stay.
+    /// Removes index entries; with `keepingPinned` pinned entries stay. Encrypted image files are retained.
     func clear(keepingPinned: Bool = false) {
+        guard Store.protectedAvailable else { return }
         let kept = keepingPinned ? entries.filter(\.isPinned) : []
         forget(entries.filter { e in !kept.contains { $0.id == e.id } })
         entries = kept
@@ -199,8 +203,8 @@ final class Clipboard {
     private func pasteNext() {
         poll()
         guard let next = Self.next(after: cursor, in: entries) else { HUD.show("End of Paste Sequence"); return }
+        guard put(next) else { return }
         cursor = next.date
-        put(next)
         later { AX.key(9, .maskCommand) }
     }
 
@@ -226,8 +230,7 @@ final class Clipboard {
         var actions = [
             Action(title: "Paste", icon: "doc.on.clipboard") { [weak self] in self?.paste(e) },
             Action(title: "Copy to Clipboard", icon: "doc.on.doc") { [weak self] in
-                self?.write(e)
-                HUD.show("Copied to Clipboard")
+                if self?.write(e) == true { HUD.show("Copied to Clipboard") }
             },
             Action(title: e.isPinned ? "Unpin Entry" : "Pin Entry", icon: e.isPinned ? "pin.slash" : "pin",
                    shortcut: Shortcut([.command, .shift], "p"), closes: false) { [weak self] in self?.togglePin(e) },
@@ -245,7 +248,7 @@ final class Clipboard {
             },
             Action(title: "Delete All Entries", icon: "trash.slash", shortcut: Shortcut([.control, .shift], "x"), destructive: true) {
                 [weak self] in
-                if confirm("Delete all clipboard entries except the pinned ones? This cannot be undone.") { self?.clear(keepingPinned: true) }
+                if confirm("Remove all clipboard entries except the pinned ones? Encrypted image files remain on disk.") { self?.clear(keepingPinned: true) }
             },
         ]
         return Item(id: e.id.uuidString, title: e.title, subtitle: relative.localizedString(for: e.date, relativeTo: Date()),
@@ -282,7 +285,7 @@ final class Clipboard {
 
     private func picture(_ name: String) -> NSImage {
         if let cached = thumbnails[name] { return cached }
-        let image = NSImage(contentsOf: imagesDir.appendingPathComponent(name)) ?? NSImage()
+        let image = Store.loadBlob(name).flatMap(NSImage.init(data:)) ?? NSImage()
         thumbnails[name] = image
         return image
     }
@@ -291,7 +294,7 @@ final class Clipboard {
     private func dimensions(_ name: String) -> String {
         if let cached = sizes[name] { return cached }
         var text = "Unknown"
-        if let source = CGImageSourceCreateWithURL(imagesDir.appendingPathComponent(name) as CFURL, nil),
+        if let data = Store.loadBlob(name), let source = CGImageSourceCreateWithData(data as CFData, nil),
            let p = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
            let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int {
             text = "\(w) × \(h)"
@@ -311,6 +314,7 @@ final class Clipboard {
     // MARK: Row actions
 
     private func togglePin(_ e: Entry) {
+        guard Store.protectedAvailable else { return }
         guard let i = entries.firstIndex(where: { $0.id == e.id }) else { return }
         entries[i].pinned = entries[i].isPinned ? nil : true
         save()
@@ -318,6 +322,7 @@ final class Clipboard {
     }
 
     private func delete(_ e: Entry) {
+        guard Store.protectedAvailable else { return }
         forget([e])
         entries.removeAll { $0.id == e.id }
         save()
@@ -325,29 +330,40 @@ final class Clipboard {
     }
 
     /// Puts the entry on the pasteboard without recording it again.
-    private func put(_ e: Entry) {
+    @discardableResult
+    private func put(_ e: Entry) -> Bool {
+        guard Store.protectedAvailable else { return false }
+        // Decrypt before touching the user's current pasteboard; a failed read must not clear it.
+        let imageData: Data?
+        if let image = e.image {
+            guard let data = Store.loadBlob(image) else { return false }
+            imageData = data
+        } else { imageData = nil }
         let pb = NSPasteboard.general
         pb.clearContents()
         if let files = e.files {
             pb.writeObjects(files.map { URL(fileURLWithPath: $0) as NSURL })
         } else if let text = e.text {
             pb.setString(text, forType: .string)
-        } else if let image = e.image, let data = try? Data(contentsOf: imagesDir.appendingPathComponent(image)) {
+        } else if let data = imageData {
             pb.setData(data, forType: .png)
         }
         lastChange = pb.changeCount
+        return true
     }
 
     /// Puts the entry on the pasteboard and moves it to the top.
-    private func write(_ e: Entry) {
-        put(e)
+    @discardableResult
+    private func write(_ e: Entry) -> Bool {
+        guard put(e) else { return false }
         var moved = e
         moved.date = Date()
         add(moved)
+        return true
     }
 
     private func paste(_ e: Entry) {
-        write(e)
+        guard write(e) else { return }
         later { AX.key(9, .maskCommand) }
     }
 

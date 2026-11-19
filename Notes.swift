@@ -156,6 +156,7 @@ final class Notes: NSObject, ObservableObject, NSWindowDelegate {
 
     /// Opens the window on a note: the given one, or the last edited, or a new one. Already open: just brings it forward.
     func open(_ id: String? = nil) {
+        guard Store.protectedAvailable else { return }
         guard id != nil || window?.isVisible != true else { return present() }
         guard let target = id ?? lastEdited?.id else { return create() }
         leave()
@@ -165,6 +166,7 @@ final class Notes: NSObject, ObservableObject, NSWindowDelegate {
 
     /// Opens the window on a new note, optionally starting with a copy of some text.
     func create(_ text: String = "") {
+        guard Store.protectedAvailable else { return }
         leave()
         let note = Note(text: text)
         notes.append(note)
@@ -174,6 +176,7 @@ final class Notes: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func edit(_ text: String) {
+        guard Store.protectedAvailable else { return }
         guard let i = currentIndex, notes[i].text != text else { return }
         var note = notes[i]
         note.text = text
@@ -183,6 +186,7 @@ final class Notes: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func delete(_ id: String) {
+        guard Store.protectedAvailable else { return }
         guard let note = notes.first(where: { $0.id == id }) else { return }
         if !note.isBlank {
             let ok = confirmDelete("Delete the note “\(note.title)”?")

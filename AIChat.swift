@@ -113,6 +113,7 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func send() {
+        guard Store.protectedAvailable else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !streaming, !text.isEmpty || !attachments.isEmpty else { return }
         let message = AIMessage(role: .user, text: text, images: attachments)
@@ -136,6 +137,7 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
     func stop() { task?.cancel() }
 
     func delete(_ id: UUID) {
+        guard Store.protectedAvailable else { return }
         if replyChat == id { task?.cancel() }
         chats.removeAll { $0.id == id }
         if current == id { current = chats.first?.id }
@@ -184,12 +186,14 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func add(_ c: Conversation) {
+        guard Store.protectedAvailable else { return }
         chats.insert(c, at: 0)
         current = c.id
         save()
     }
 
     private func append(_ m: AIMessage, to id: UUID) {
+        guard Store.protectedAvailable else { return }
         guard let i = chats.firstIndex(where: { $0.id == id }) else { return }   // deleted while the answer streamed
         var c = chats.remove(at: i)
         c.messages.append(m)

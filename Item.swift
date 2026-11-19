@@ -116,14 +116,32 @@ struct FormSpec {
 
 /// Files the app keeps in ~/Library/Application Support/Lumen.
 enum Store {
-    static let dir: URL = {
-        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Lumen")
-        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        return d
-    }()
+    private static var storage = SecureStorage(root: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Lumen"), key: ArchiveKeychain.key, onFailure: {
+            DispatchQueue.main.async {
+                guard NSApp != nil else { return }
+                let alert = NSAlert()
+                alert.messageText = "Protected storage is unavailable"
+                alert.informativeText = SecureStorage.message
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        })
+    static var dir: URL {
+        let root = storage.root
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+    static var protectedAvailable: Bool { storage.available }
+    static func prepareSensitiveStorage() { storage.prepare() }
+    // Called once at the beginning of the check executable, before any feature singleton is used.
+    static func useForChecks(_ isolatedStorage: SecureStorage) { storage = isolatedStorage }
+    static func loadBlob(_ name: String) -> Data? { storage.loadBlob("clipboard/" + name) }
+    @discardableResult
+    static func saveBlob(_ data: Data, _ name: String) -> Bool { storage.saveBlob(data, "clipboard/" + name) }
 
     static func load<T: Decodable>(_ name: String) -> T? {
+        if SecureStorage.protected(name) { return storage.load(name) }
         let url = dir.appendingPathComponent(name)
         guard let data = try? Data(contentsOf: url) else { return nil }
         do {
@@ -139,6 +157,7 @@ enum Store {
     }
 
     static func save<T: Encodable>(_ value: T, _ name: String) {
+        if SecureStorage.protected(name) { storage.save(value, name); return }
         try? JSONEncoder().encode(value).write(to: dir.appendingPathComponent(name), options: .atomic)
     }
 }

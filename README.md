@@ -59,13 +59,11 @@ Use the configured launcher hotkey to open search. Press Return to run the selec
 
 ## Data and privacy
 
-- **Stays on this Mac**, in `~/Library/Application Support/Lumen`, unencrypted: usage ranking, favorites,
-  aliases and hotkeys, clipboard history with images and copies of new screenshots, snippets, quicklinks,
-  calculator history, notes, AI chats (including attached screenshots), your AI commands, focus sessions and
-  auto-quit rules, the GitHub, script and shortcut caches, and which mite project a meeting title was booked to. Copies that
-  password managers mark as concealed or transient are never stored. Settings → Clear Clipboard History
-  deletes the history.
+- **Stays on this Mac**, in `~/Library/Application Support/Lumen`: clipboard history and its saved images, notes and AI chats are encrypted with AES-256-GCM. The key is stored in the default macOS Keychain. Lumen migrates existing files when it opens protected storage. [Storage and recovery](docs/adr/0001-encrypted-personal-storage.md)
+- Preferences, quicklinks, snippets, usage ranking, caches and other feature data remain unencrypted. Settings → Clear Clipboard History removes history entries. Encrypted image files remain on disk to preserve recovery after a failed save. Copies marked concealed or transient by password managers are excluded from the history.
 - AI chats are kept until you delete them with **Delete Chat**. Creating a new chat keeps older conversations.
+- If the Keychain is locked or the key is missing, Lumen pauses protected storage and preserves the files. A usable backup needs the original Keychain key along with Application Support.
+- Note exports, original screenshots and the system pasteboard are outside archive encryption. Codex image attachments use temporary files that Lumen removes when a request finishes normally.
 - **Leaves the Mac** only for these features:
   - AI: the question, the selected text, chat messages and screenshots you send go to the configured provider;
     Translate sends text to AI only after you explicitly choose the AI translation action. Claude: `api.anthropic.com`,
