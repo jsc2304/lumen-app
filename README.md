@@ -65,6 +65,7 @@ Use the configured launcher hotkey to open search. Press Return to run the selec
   auto-quit rules, the GitHub, script and shortcut caches, and which mite project a meeting title was booked to. Copies that
   password managers mark as concealed or transient are never stored. Settings → Clear Clipboard History
   deletes the history.
+- AI chats are kept until you delete them with **Delete Chat**. Creating a new chat keeps older conversations.
 - **Leaves the Mac** only for these features:
   - AI: the question, the selected text, chat messages and screenshots you send go to the configured provider;
     Translate sends text to AI only after you explicitly choose the AI translation action. Claude: `api.anthropic.com`,

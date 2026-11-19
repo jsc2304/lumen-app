@@ -5,7 +5,6 @@ import SwiftUI
 /// a window, the screen or a screen area into a new chat.
 final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
     static let shared = AIChat()
-    static let limit = 200
 
     struct Conversation: Codable, Identifiable {
         var id = UUID()
@@ -17,7 +16,7 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
 
     // ponytail: images live inline in ai-chats.json (base64, downscaled to 1920 px); move them to files next to it
     // if heavy screenshot use makes the file slow to load.
-    @Published private(set) var chats: [Conversation] = Store.load("ai-chats.json") ?? []
+    @Published private(set) var chats: [Conversation]
     @Published var current: UUID?   // nil: a new chat that is saved with its first message
     @Published var input = ""
     @Published var attachments: [Data] = []
@@ -30,6 +29,15 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
     private var task: Task<Void, Never>?
     private var window: NSWindow?
     private let disk = DispatchQueue(label: "Lumen AI chats")
+    private let persist: ([Conversation]) -> Void
+
+    // Injectable persistence keeps checks away from the user's chat archive.
+    init(chats: [Conversation] = Store.load("ai-chats.json") ?? [],
+         persist: @escaping ([Conversation]) -> Void = { Store.save($0, "ai-chats.json") }) {
+        self.chats = chats
+        self.persist = persist
+        super.init()
+    }
 
     private static let system = "You are a helpful assistant in a chat window of a macOS launcher. Format with inline Markdown only "
         + "(bold, italics, code, links); headings and tables are not rendered."
@@ -175,9 +183,8 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
         task = nil
     }
 
-    private func add(_ c: Conversation) {
+    func add(_ c: Conversation) {
         chats.insert(c, at: 0)
-        chats = Array(chats.prefix(Self.limit))
         current = c.id
         save()
     }
@@ -193,7 +200,8 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
 
     private func save() {
         let snapshot = chats
-        disk.async { Store.save(snapshot, "ai-chats.json") }
+        let persist = persist
+        disk.async { persist(snapshot) }
     }
 
     /// A chat's name: the first line of its first message without quote marks, at most 60 characters.
