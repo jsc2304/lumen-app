@@ -46,14 +46,13 @@ func checkAIChat() {
     let history = (0..<200).map { n in
         AIChat.Conversation(messages: [AIMessage(role: .user, text: "Chat \(n)", images: [png])])
     }
-    let saved = DispatchSemaphore(value: 0)
     var archived: [AIChat.Conversation] = []
-    let model = AIChat(chats: history, persist: { archived = $0; saved.signal() })
+    let model = AIChat(chats: history, persist: { archived = $0 })
     let newest = AIChat.Conversation(messages: [AIMessage(role: .user, text: "Newest")])
     model.add(newest)
     expect(model.chats.count == 201 && model.current == newest.id, "chat 201 is selected without trimming history")
     expect(model.chats.map(\.id) == [newest.id] + history.map(\.id), "all older chats keep their order")
-    expect(saved.wait(timeout: .now() + 5) == .success, "chat archive was saved")
+    model.flushPendingWrites()
     let restored = (try? JSONEncoder().encode(archived)).flatMap { try? JSONDecoder().decode([AIChat.Conversation].self, from: $0) }
     expect(restored?.count == 201 && restored?.last?.id == history.last?.id
            && restored?.last?.messages == history.last?.messages, "saved history keeps the oldest chat and its image")

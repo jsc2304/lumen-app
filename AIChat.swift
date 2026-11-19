@@ -4,7 +4,14 @@ import SwiftUI
 /// AI Chat: a window with saved multi-turn conversations, plus the root commands that send the selection,
 /// a window, the screen or a screen area into a new chat.
 final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
-    static let shared = AIChat()
+    static let shared: AIChat = {
+        let chat = AIChat()
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
+                                               object: nil, queue: .main) { [weak chat] _ in
+            chat?.flushPendingWrites()
+        }
+        return chat
+    }()
 
     struct Conversation: Codable, Identifiable {
         var id = UUID()
@@ -201,6 +208,8 @@ final class AIChat: NSObject, ObservableObject, NSWindowDelegate {
         chats.insert(c, at: 0)
         save()
     }
+
+    func flushPendingWrites() { disk.sync {} }
 
     private func save() {
         let snapshot = chats
